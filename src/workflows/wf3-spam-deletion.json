@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "59 23 * * *"
+              "expression": "0 8 * * *"
             }
           ]
         }
       },
       "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567801",
-      "name": "Schedule: 11:59 PM Daily",
+      "name": "Schedule: 8:00 AM Daily",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.1,
       "position": [250, 300]
@@ -199,5 +199,5 @@
   "pinData": {},
   "versionId": "1.0.0",
   "id": "wf3-spam-deletion",
-  "active": false
+  "active": true
 }

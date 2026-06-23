@@ -216,6 +216,7 @@
     "timezone": "UTC"
   },
   "staticData": null,
+  "active": true,
   "tags": [
     {
       "name": "email",

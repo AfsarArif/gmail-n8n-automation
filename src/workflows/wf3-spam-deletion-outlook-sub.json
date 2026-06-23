@@ -165,5 +165,5 @@
   "pinData": {},
   "versionId": "1.0.0",
   "id": "wf3-spam-deletion-outlook-sub",
-  "active": false
+  "active": true
 }

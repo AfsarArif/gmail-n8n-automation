@@ -1300,6 +1300,6 @@
   "staticData": null,
   "pinData": {},
   "versionId": "1.0.0",
-  "active": false,
+  "active": true,
   "id": "wf0-shared-classifier-001"
 }

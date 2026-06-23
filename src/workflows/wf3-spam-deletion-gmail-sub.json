@@ -166,5 +166,5 @@
   "pinData": {},
   "versionId": "1.0.0",
   "id": "wf3-spam-deletion-gmail-sub",
-  "active": false
+  "active": true
 }
