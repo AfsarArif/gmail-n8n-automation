@@ -21,7 +21,7 @@ export {
   createScheduleTriggerNode,
   createSplitInBatchesNode,
   createMergeNode,
-} from './n8n-templates.js';
+} from './n8n-templates';
 
 export type {
   N8NWorkflow,
@@ -29,7 +29,7 @@ export type {
   N8NConnections,
   N8NNodeParameters,
   N8NNodePosition,
-} from './n8n-templates.js';
+} from './n8n-templates';
 
 export {
   ErrorCategory,
@@ -38,12 +38,12 @@ export {
   buildRetryConfig,
   delay,
   logError,
-} from './error-handler.js';
+} from './error-handler';
 
-export type { RetryConfig } from './error-handler.js';
+export type { RetryConfig } from './error-handler';
 
-export { RateLimiter } from './rate-limiter.js';
-export type { AccountType } from './rate-limiter.js';
+export { RateLimiter } from './rate-limiter';
+export type { AccountType } from './rate-limiter';
 
-export { getConfig } from './env.js';
-export type { AppConfig } from './env.js';
+export { getConfig } from './env';
+export type { AppConfig } from './env';

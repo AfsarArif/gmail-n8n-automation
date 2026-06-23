@@ -6,7 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { RateLimiter } from './rate-limiter.js';
+import { RateLimiter } from './rate-limiter';
 
 describe('RateLimiter', () => {
   describe('checkLimit', () => {

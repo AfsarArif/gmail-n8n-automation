@@ -12,7 +12,7 @@ import {
   isRetryable,
   buildRetryConfig,
   logError,
-} from './error-handler.js';
+} from './error-handler';
 
 describe('classifyError', () => {
   it('classifies timeout errors as DEEPSEEK_TIMEOUT', () => {

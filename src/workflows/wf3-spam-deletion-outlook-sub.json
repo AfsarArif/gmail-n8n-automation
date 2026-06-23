@@ -1,0 +1,169 @@
+{
+  "name": "WF-3 Outlook Delete Junk Sub-Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780001",
+      "name": "Trigger: Receive Account Config",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "filters": {
+          "folderId": "junkemail",
+          "receivedAfter": "={{ new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() }}"
+        },
+        "options": {},
+        "returnAll": true
+      },
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780002",
+      "name": "MS Outlook: Get Junk Messages",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-items",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "larger",
+                "name": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": false
+        }
+      },
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780003",
+      "name": "IF: Has Junk?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 50,
+        "options": {}
+      },
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780004",
+      "name": "Split: Batches of 50",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "delete",
+        "id": "={{ $json.id }}"
+      },
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780005",
+      "name": "MS Outlook: Permanent Delete",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build DeleteResult to return to WF-3 main workflow.\n// Account info comes from the trigger input (passed via Execute Workflow).\n\nconst triggerInput = $('Trigger: Receive Account Config').first().json;\nconst allDeleted = $input.all();\n\nreturn [{\n  json: {\n    account_type: triggerInput.account_type || 'outlook',\n    credential_name: triggerInput.credential_name || '',\n    email: triggerInput.email || '',\n    deleted_count: allDeleted.length,\n    error: null,\n  }\n}];"
+      },
+      "id": "c1d2e3f4-a5b6-7890-cdef-123456780006",
+      "name": "Code: Build Delete Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Trigger: Receive Account Config": {
+      "main": [
+        [
+          {
+            "node": "MS Outlook: Get Junk Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MS Outlook: Get Junk Messages": {
+      "main": [
+        [
+          {
+            "node": "IF: Has Junk?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Has Junk?": {
+      "main": [
+        [
+          {
+            "node": "Split: Batches of 50",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Build Delete Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split: Batches of 50": {
+      "main": [
+        [
+          {
+            "node": "MS Outlook: Permanent Delete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MS Outlook: Permanent Delete": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Delete Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Chicago",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "id": "wf3-spam-deletion-outlook-sub",
+  "active": false
+}

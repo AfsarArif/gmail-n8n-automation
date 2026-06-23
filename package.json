@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint src/",
-    "test": "ts-node src/code/payload-builder.test.ts && ts-node src/code/account-config.test.ts",
+    "test": "npm run test:code && npm run test:utils",
+    "test:code": "ts-node src/code/pre-classifier.test.ts && ts-node src/code/classifier.test.ts && ts-node src/code/label-mapper.test.ts && ts-node src/code/payload-builder.test.ts && ts-node src/code/account-config.test.ts && ts-node src/code/spam-deleter.test.ts",
+    "test:utils": "ts-node src/utils/env.test.ts && ts-node src/utils/error-handler.test.ts && ts-node src/utils/rate-limiter.test.ts",
     "test:payload": "ts-node src/code/payload-builder.test.ts",
     "test:config": "ts-node src/code/account-config.test.ts",
     "validate:workflows": "node src/utils/validate-workflows.js"

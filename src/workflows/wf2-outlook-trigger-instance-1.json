@@ -1,0 +1,242 @@
+{
+  "name": "WF-2: Outlook Trigger — myname@hotmail.com",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "options": {},
+        "folder": "Inbox",
+        "onlyUnread": true
+      },
+      "id": "outlook-trigger-001",
+      "name": "Outlook Trigger",
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "outlook-hotmail-cred-id",
+          "name": "Outlook - myname@hotmail.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dedup Guard: skip if any AI- category already applied\n// Returns true = not yet categorized → proceed\n// Returns false = already categorized → stop\n\nconst categories = $input.first().json.categories || [];\nconst alreadyCategorized = categories.some(c => String(c).startsWith('AI-'));\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    proceed: !alreadyCategorized\n  }\n}];"
+      },
+      "id": "code-dedup-002",
+      "name": "Dedup Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-proceed",
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-dedup-003",
+      "name": "Proceed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "account_type",
+              "value": "outlook"
+            },
+            {
+              "name": "credential_name",
+              "value": "Outlook - myname@hotmail.com"
+            },
+            {
+              "name": "email_address",
+              "value": "myname@hotmail.com"
+            },
+            {
+              "name": "message_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "thread_id",
+              "value": "={{ $json.conversationId }}"
+            },
+            {
+              "name": "subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "from",
+              "value": "={{ $json.from.emailAddress.address }}"
+            },
+            {
+              "name": "body_html",
+              "value": "={{ $json.body.content }}"
+            },
+            {
+              "name": "body_text",
+              "value": "={{ $json.bodyPreview }}"
+            },
+            {
+              "name": "snippet",
+              "value": "={{ $json.bodyPreview }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-payload-004",
+      "name": "Build WF-0 Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/classify-email",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Token",
+              "value": "={{ $env.WF0_SECRET_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "responseFormat": "string"
+            }
+          }
+        }
+      },
+      "id": "http-call-wf0-005",
+      "name": "Call WF-0 Classifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Outlook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dedup Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Guard": {
+      "main": [
+        [
+          {
+            "node": "Proceed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Proceed?": {
+      "main": [
+        [
+          {
+            "node": "Build WF-0 Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build WF-0 Payload": {
+      "main": [
+        [
+          {
+            "node": "Call WF-0 Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call WF-0 Classifier": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false,
+    "timezone": "UTC"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "email",
+      "createdAt": "2026-06-22T00:00:00.000Z",
+      "updatedAt": "2026-06-22T00:00:00.000Z"
+    },
+    {
+      "name": "outlook",
+      "createdAt": "2026-06-22T00:00:00.000Z",
+      "updatedAt": "2026-06-22T00:00:00.000Z"
+    },
+    {
+      "name": "trigger",
+      "createdAt": "2026-06-22T00:00:00.000Z",
+      "updatedAt": "2026-06-22T00:00:00.000Z"
+    },
+    {
+      "name": "production",
+      "createdAt": "2026-06-22T00:00:00.000Z",
+      "updatedAt": "2026-06-22T00:00:00.000Z"
+    }
+  ]
+}

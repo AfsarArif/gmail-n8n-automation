@@ -1,0 +1,1305 @@
+{
+  "name": "WF-0: Shared Classification Sub-Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "classify-email",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth",
+        "headerAuth": {
+          "name": "X-N8N-Token",
+          "value": "={{ $env.WF0_SECRET_TOKEN }}"
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000001",
+      "name": "Webhook: POST /classify-email",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sender Pre-Classifier — matches from address against known domain rules\nconst from = ($input.first().json.from || '').toLowerCase();\n\n// Domain classification rules (first-match wins)\nconst rules = [\n  {\n    domains: ['linkedin.com','twitter.com','x.com','facebook.com','instagram.com',\n              'reddit.com','github.com','discord.com','meetup.com','slack.com'],\n    category: 'social'\n  },\n  {\n    domains: ['indeed.com','glassdoor.com','levels.fyi','ziprecruiter.com','dice.com',\n              'hired.com','greenhouse.io','lever.co','workday.com','myworkdayjobs.com',\n              'wellfound.com','otta.com'],\n    category: 'career'\n  },\n  {\n    domains: ['amazon.com','apple.com','paypal.com','stripe.com','shopify.com',\n              'ebay.com','bestbuy.com','ups.com','fedex.com','usps.com'],\n    category: 'fyi'\n  },\n  {\n    domains: ['substack.com','beehiiv.com','convertkit.com','mailchimp.com',\n              'klaviyo.com','sendgrid.net','constantcontact.com'],\n    category: 'newsletter'\n  },\n];\n\n// Match sender domain\nfor (const rule of rules) {\n  if (rule.domains.some(d => from.includes(d))) {\n    return [{\n      json: {\n        ...$input.first().json,\n        fast_category: rule.category,\n        skip_ai: true\n      }\n    }];\n  }\n}\n\n// No match — let AI classify\nreturn [{\n  json: {\n    ...$input.first().json,\n    fast_category: null,\n    skip_ai: false\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000002",
+      "name": "Sender Pre-Classifier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip_ai }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000003",
+      "name": "Skip AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b0000000-0000-4000-8000-000000000001",
+              "name": "final_category",
+              "value": "={{ $json.fast_category }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000004",
+      "name": "Set: Fast Category",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [780, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// HTML to Plain Text — strip HTML tags for the AI classifier\n// DeepSeek only needs the textual content, not markup.\nconst html = $input.first().json.body_html || $input.first().json.body_text || $input.first().json.snippet || '';\n\n// Simple HTML tag stripping (production-grade would use a real parser,\n// but this is sufficient for the classifier's ~300 char preview)\nconst cleaned = html\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .replace(/&#39;/g, \"'\")\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    cleaned_body: cleaned\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000005",
+      "name": "HTML to Plain Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 500]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $vars.system_prompt || '\nYou are an email classifier. Return valid JSON only — no markdown, no explanation, no extra text.\n\nClassify the email into exactly one category:\n\n- \"newsletter\":   Blog digests, editorial content, curated reading lists, publication emails\n- \"action\":       Requires a direct reply or response (questions, requests, meeting invites, tasks)\n- \"social\":       Notifications from social platforms (LinkedIn, Twitter/X, Facebook, Instagram, Reddit, GitHub, Discord)\n- \"promotions\":   Sales, discount codes, limited-time offers, marketing campaigns, product launches\n- \"career\":       Job postings, recruiter outreach, interview requests, application updates, job alerts\n- \"fyi\":          Receipts, order confirmations, shipping updates, account notifications, no reply needed\n- \"spam\":         Junk mail, phishing, irrelevant unsolicited bulk mail\n\nReturn exactly this JSON:\n{\n  \"category\": \"newsletter|action|social|promotions|career|fyi|spam\"\n}\n' }}\n\nFrom: {{ $json.from }}\nSubject: {{ $json.subject }}\nBody preview: {{ ($json.cleaned_body || $json.body_text || $json.snippet || '').slice(0, 300) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000006",
+      "name": "DeepSeek: Basic LLM Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1,
+      "position": [1300, 500]
+    },
+    {
+      "parameters": {
+        "model": "deepseek-chat",
+        "options": {
+          "temperature": 0,
+          "maxTokens": 128,
+          "topP": 1
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000007",
+      "name": "DeepSeek Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1040, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate + normalize DeepSeek category output\n// The LLM Chain returns raw text — we extract the JSON and validate.\n\nconst validCategories = ['newsletter', 'action', 'social', 'promotions', 'career', 'fyi', 'spam'];\n\nlet rawText = '';\n\n// Try to extract the LLM response from various N8N AI node output shapes\nif ($input.first().json.text) {\n  rawText = $input.first().json.text;\n} else if ($input.first().json.output) {\n  rawText = $input.first().json.output;\n} else if ($input.first().json.response) {\n  rawText = $input.first().json.response;\n} else {\n  // Fallback: stringify entire JSON and try regex extraction\n  rawText = JSON.stringify($input.first().json);\n}\n\n// Attempt JSON parse\nlet category = '';\ntry {\n  // Handle markdown code fences sometimes added by models\n  const clean = rawText\n    .replace(/```json\\s*/gi, '')\n    .replace(/```\\s*/g, '')\n    .trim();\n  const parsed = JSON.parse(clean);\n  category = (parsed.category || '').toString().trim().toLowerCase();\n} catch {\n  // Regex fallback for malformed output\n  const match = rawText.match(/\"category\"\\s*:\\s*\"([^\"]+)\"/i);\n  if (match && match[1]) {\n    category = match[1].trim().toLowerCase();\n  }\n}\n\n// Validate and fall back to 'fyi' if invalid\nconst finalCategory = validCategories.includes(category) ? category : 'fyi';\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    category: finalCategory\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000008",
+      "name": "Validate Category",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b0000000-0000-4000-8000-000000000002",
+              "name": "final_category",
+              "value": "={{ $json.fast_category || $json.category || 'fyi' }}",
+              "type": "string"
+            },
+            {
+              "id": "b0000000-0000-4000-8000-000000000003",
+              "name": "account_type",
+              "value": "={{ $json.account_type }}",
+              "type": "string"
+            },
+            {
+              "id": "b0000000-0000-4000-8000-000000000004",
+              "name": "message_id",
+              "value": "={{ $json.message_id }}",
+              "type": "string"
+            },
+            {
+              "id": "b0000000-0000-4000-8000-000000000005",
+              "name": "thread_id",
+              "value": "={{ $json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "b0000000-0000-4000-8000-000000000006",
+              "name": "credential_name",
+              "value": "={{ $json.credential_name }}",
+              "type": "string"
+            },
+            {
+              "id": "b0000000-0000-4000-8000-000000000007",
+              "name": "email_address",
+              "value": "={{ $json.email_address }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000009",
+      "name": "Set: Normalize",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1820, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000010",
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2080, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.account_type }}",
+                    "rightValue": "gmail",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.account_type }}",
+                    "rightValue": "outlook",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ],
+          "options": {}
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000011",
+      "name": "Switch: Account Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2340, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "newsletter",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "action",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "social",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "promotions",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "career",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "fyi",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ],
+          "options": {
+            "fallbackOutput": "default"
+          }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000012",
+      "name": "Switch: Gmail Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2600, -600]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Newsletter"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000101",
+      "name": "Gmail: Add Label — Newsletter",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -1200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Action-Required"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000102",
+      "name": "Gmail: Add Label — Action",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -1000]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Social"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000103",
+      "name": "Gmail: Add Label — Social",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -800]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Promotions"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000104",
+      "name": "Gmail: Add Label — Promotions",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -600]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Career"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000105",
+      "name": "Gmail: Add Label — Career",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/FYI"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000106",
+      "name": "Gmail: Add Label — FYI",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, -200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelNames": { "labelName": ["AI/Spam"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000107",
+      "name": "Gmail: Add Label — Spam",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2860, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "markAsRead",
+        "messageId": "={{ $json.message_id }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000201",
+      "name": "Gmail: Mark Read — Newsletter",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3120, -1200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "markAsRead",
+        "messageId": "={{ $json.message_id }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000203",
+      "name": "Gmail: Mark Read — Social",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3120, -800]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "markAsRead",
+        "messageId": "={{ $json.message_id }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000204",
+      "name": "Gmail: Mark Read — Promotions",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3120, -600]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "markAsRead",
+        "messageId": "={{ $json.message_id }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000206",
+      "name": "Gmail: Mark Read — FYI",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3120, -200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "markAsRead",
+        "messageId": "={{ $json.message_id }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000207",
+      "name": "Gmail: Mark Read — Spam",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3120, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modify",
+        "messageId": "={{ $json.message_id }}",
+        "labelNamesToRemove": { "labelName": ["INBOX"] }
+      },
+      "id": "a0000000-0000-4000-8000-000000000304",
+      "name": "Gmail: Archive — Promotions",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [3380, -600]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "newsletter",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "action",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "social",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "promotions",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "career",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.final_category }}",
+                    "rightValue": "fyi",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ],
+          "options": {
+            "fallbackOutput": "default"
+          }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000013",
+      "name": "Switch: Outlook Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2600, 400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Newsletter"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000401",
+      "name": "Outlook: Update — Newsletter",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Action"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000402",
+      "name": "Outlook: Update — Action",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Social"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000403",
+      "name": "Outlook: Update — Social",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 600]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Promotions"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000404",
+      "name": "Outlook: Update — Promotions",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 800]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Career"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000405",
+      "name": "Outlook: Update — Career",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 1000]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-FYI"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000406",
+      "name": "Outlook: Update — FYI",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 1200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "categories": { "category": ["AI-Spam"] }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000407",
+      "name": "Outlook: Update — Spam",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2860, 1400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "isRead": true
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000501",
+      "name": "Outlook: Mark Read — Newsletter",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3120, 200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "isRead": true
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000503",
+      "name": "Outlook: Mark Read — Social",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3120, 600]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "isRead": true
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000504",
+      "name": "Outlook: Mark Read — Promotions",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3120, 800]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "isRead": true
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000506",
+      "name": "Outlook: Mark Read — FYI",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3120, 1200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "isRead": true
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000507",
+      "name": "Outlook: Mark Read — Spam",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3120, 1400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "move",
+        "messageId": "={{ $json.message_id }}",
+        "additionalFields": {
+          "destinationFolder": { "folderId": "archive" }
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000604",
+      "name": "Outlook: Move to Archive — Promotions",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [3380, 800]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook Response — return final classification summary\nreturn [{\n  json: {\n    success: true,\n    account_type: $input.first().json.account_type,\n    email_address: $input.first().json.email_address,\n    message_id: $input.first().json.message_id,\n    final_category: $input.first().json.final_category,\n    classified_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000014",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3640, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: POST /classify-email": {
+      "main": [
+        [
+          {
+            "node": "Sender Pre-Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sender Pre-Classifier": {
+      "main": [
+        [
+          {
+            "node": "Skip AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip AI?": {
+      "main": [
+        [
+          {
+            "node": "Set: Fast Category",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTML to Plain Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Fast Category": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML to Plain Text": {
+      "main": [
+        [
+          {
+            "node": "DeepSeek: Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "DeepSeek: Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek: Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Validate Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Category": {
+      "main": [
+        [
+          {
+            "node": "Set: Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Normalize": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Paths": {
+      "main": [
+        [
+          {
+            "node": "Switch: Account Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch: Account Type": {
+      "main": [
+        [
+          {
+            "node": "Switch: Gmail Category",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Switch: Outlook Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch: Gmail Category": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Add Label — Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — Social",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — Career",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — FYI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Add Label — Spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Mark Read — Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Action": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Social": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Mark Read — Social",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Mark Read — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Career": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — FYI": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Mark Read — FYI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Add Label — Spam": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Mark Read — Spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Mark Read — Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Mark Read — Social": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Mark Read — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Archive — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Mark Read — FYI": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Mark Read — Spam": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Archive — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch: Outlook Category": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Update — Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — Social",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — Career",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — FYI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook: Update — Spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Mark Read — Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Action": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Social": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Mark Read — Social",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Mark Read — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Career": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — FYI": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Mark Read — FYI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Update — Spam": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Mark Read — Spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Mark Read — Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Mark Read — Social": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Mark Read — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Outlook: Move to Archive — Promotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Mark Read — FYI": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Mark Read — Spam": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook: Move to Archive — Promotions": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": false,
+  "id": "wf0-shared-classifier-001"
+}

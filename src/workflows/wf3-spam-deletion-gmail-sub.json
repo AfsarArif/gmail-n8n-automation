@@ -1,0 +1,170 @@
+{
+  "name": "WF-3 Gmail Delete Spam Sub-Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678001",
+      "name": "Trigger: Receive Account Config",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "filters": {
+          "query": "label:spam older_than:1d"
+        },
+        "options": {
+          "limit": 500
+        },
+        "returnAll": true
+      },
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678002",
+      "name": "Gmail: Get Spam Messages",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-items",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "larger",
+                "name": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": false
+        }
+      },
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678003",
+      "name": "IF: Has Spam?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 50,
+        "options": {}
+      },
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678004",
+      "name": "Split: Batches of 50",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "delete",
+        "id": "={{ $json.id }}"
+      },
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678005",
+      "name": "Gmail: Permanent Delete",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build DeleteResult to return to WF-3 main workflow.\n// Account info comes from the trigger input (passed via Execute Workflow).\n\nconst triggerInput = $('Trigger: Receive Account Config').first().json;\nconst allDeleted = $input.all();\n\nreturn [{\n  json: {\n    account_type: triggerInput.account_type || 'gmail',\n    credential_name: triggerInput.credential_name || '',\n    email: triggerInput.email || '',\n    deleted_count: allDeleted.length,\n    error: null,\n  }\n}];"
+      },
+      "id": "b1c2d3e4-f5a6-7890-bcde-f12345678006",
+      "name": "Code: Build Delete Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Trigger: Receive Account Config": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Get Spam Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Get Spam Messages": {
+      "main": [
+        [
+          {
+            "node": "IF: Has Spam?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Has Spam?": {
+      "main": [
+        [
+          {
+            "node": "Split: Batches of 50",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Build Delete Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split: Batches of 50": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Permanent Delete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Permanent Delete": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Delete Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Chicago",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "id": "wf3-spam-deletion-gmail-sub",
+  "active": false
+}
