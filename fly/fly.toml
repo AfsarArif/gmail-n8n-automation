@@ -1,0 +1,43 @@
+# fly.toml — N8N deployment on Fly.io
+# App: angafsar → https://angafsar.fly.dev
+
+app = "angafsar"
+primary_region = "iad"
+
+[build]
+  image = "n8nio/n8n:latest"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 5678
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+[mounts]
+  source = "n8n_data"
+  destination = "/home/node/.n8n"
+
+[env]
+  N8N_LISTEN_ADDRESS = "::"
+  N8N_PROTOCOL = "https"
+  N8N_HOST = "angafsar.fly.dev"
+  N8N_PORT = "5678"
+  N8N_EDITOR_BASE_URL = "https://angafsar.fly.dev"
+  WEBHOOK_URL = "https://angafsar.fly.dev"
+  NODE_ENV = "production"
+  N8N_DIAGNOSTICS_ENABLED = "false"
+  N8N_VERSION_NOTIFICATIONS_ENABLED = "false"

@@ -10,11 +10,8 @@
 // Core n8n types
 // ---------------------------------------------------------------------------
 
-/** n8n node position on the editor canvas (in pixels). */
-export interface N8NNodePosition {
-  x: number;
-  y: number;
-}
+/** n8n node position on the editor canvas (in pixels). N8N REST API expects [x, y]. */
+export type N8NNodePosition = [number, number];
 
 /**
  * Free-form parameters bag for a node.
@@ -37,6 +34,8 @@ export interface N8NNode {
   credentials?: Record<string, { id: string; name: string }>;
   /** Webhook IDs assigned at runtime by n8n. */
   webhookId?: string;
+  /** Continue execution even if this node fails. */
+  continueOnFail?: boolean;
 }
 
 /**
@@ -134,7 +133,7 @@ export function createWebhookNode(params: NodeParams & {
   httpMethod?: string;
   path?: string;
   authentication?: 'none' | 'headerAuth' | 'basicAuth';
-  responseMode?: 'immediately' | 'whenLastNodeExecutes';
+  responseMode?: 'immediately' | 'lastNode' | 'whenLastNodeExecutes' | 'webhook';
 }): N8NNode {
   return makeNode('n8n-nodes-base.webhook', 2, {
     ...params,
@@ -148,6 +147,19 @@ export function createWebhookNode(params: NodeParams & {
   });
 }
 
+/** Create a Manual Trigger node (no parameters needed). */
+export function createManualTriggerNode(params: NodeParams = {
+  name: 'Manual Trigger',
+  position: [250, 300],
+}): N8NNode {
+  return makeNode('n8n-nodes-base.manualTrigger', 1, {
+    ...params,
+    parameters: {
+      ...params.parameters,
+    },
+  });
+}
+
 /** Create a generic Code node (JavaScript). */
 export function createCodeNode(params: NodeParams & {
   jsCode?: string;
@@ -156,6 +168,23 @@ export function createCodeNode(params: NodeParams & {
     ...params,
     parameters: {
       jsCode: params.jsCode ?? '',
+      ...params.parameters,
+    },
+  });
+}
+
+/** Create a Wait node (pauses execution for a specified interval). */
+export function createWaitNode(params: NodeParams & {
+  resume?: 'afterTimeInterval' | 'onWebhookCall';
+  waitAmount?: number;
+  waitUnit?: 'seconds' | 'minutes' | 'hours';
+}): N8NNode {
+  return makeNode('n8n-nodes-base.wait', 2, {
+    ...params,
+    parameters: {
+      resume: params.resume ?? 'afterTimeInterval',
+      waitAmount: params.waitAmount ?? 1,
+      waitUnit: params.waitUnit ?? 'seconds',
       ...params.parameters,
     },
   });
@@ -234,7 +263,7 @@ export function createGmailNode(params: NodeParams & {
   return makeNode('n8n-nodes-base.gmail', 2, {
     ...params,
     credentials: params.credentialName
-      ? { gmailOAuth2Api: { id: '1', name: params.credentialName } }
+      ? { gmailOAuth2: { id: '1', name: params.credentialName } }
       : undefined,
     parameters: {
       resource: params.resource ?? 'message',

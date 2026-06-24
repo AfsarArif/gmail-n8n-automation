@@ -5,7 +5,7 @@
 Automatically classify and label incoming emails across multiple Gmail and Outlook/Hotmail accounts using DeepSeek AI. Delete spam/junk daily across all accounts. One shared classification engine, multiple account triggers.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-169%20passing-green)]()
+[![Tests](https://img.shields.io/badge/tests-216%20passing-green)]()
 
 ---
 
@@ -73,7 +73,8 @@ Automatically classify and label incoming emails across multiple Gmail and Outlo
 | **WF-0** | Shared Classifier | Webhook (POST) | DeepSeek + all Gmail/Outlook |
 | **WF-1x** | Gmail Trigger (per account) | Gmail Message Received | Gmail OAuth2 |
 | **WF-2x** | Outlook Trigger (per account) | MS Outlook Message Received | MS Outlook OAuth2 |
-| **WF-3** | Daily Spam Deletion | Schedule (11:59 PM) | All accounts |
+| **WF-3** | Daily Spam Deletion | Schedule (8:00 AM) | All accounts |
+| **WF-4** | Initial Cleanup (one-time) | Manual Trigger | Gmail OAuth2 (per account) |
 
 ---
 
@@ -103,7 +104,7 @@ npm install
 cp .env.example .env
 # → Edit .env with your N8N_BASE_URL, DeepSeek API key, and account lists
 
-# Run all tests (169 tests, 36 suites)
+# Run all tests (216 tests, 39 suites)
 npm test
 
 # TypeScript check
@@ -111,6 +112,9 @@ npx tsc --noEmit
 
 # Validate workflow JSON files
 npm run validate:workflows
+
+# Generate initial cleanup workflow (one-time historical email processing)
+npm run generate:cleanup-workflow
 ```
 
 ---
@@ -131,7 +135,8 @@ gmailn8n/
 │   │   ├── payload-builder.ts         # Gmail/Outlook trigger → WF-0 payload builder
 │   │   ├── account-config.ts          # Account list from env vars
 │   │   ├── spam-deleter.ts            # Spam query builder + summary
-│   │   └── *.test.ts                  # 119 tests, 21 suites
+│   │   ├── initial-cleanup.ts         # WF-4: batch cleanup logic + workflow generator
+│   │   └── *.test.ts                  # 166 tests, 30 suites
 │   │
 │   ├── utils/                         # Shared utilities
 │   │   ├── index.ts                   # Barrel export
@@ -142,6 +147,8 @@ gmailn8n/
 │   │   ├── env.ts                     # Typed env config loader
 │   │   └── *.test.ts                  # 37 tests, 10 suites
 │   │
+│   ├── generate-cleanup-workflow.ts   # CLI: generate WF-4 JSON from .env
+│   │
 │   └── workflows/                     # N8N workflow JSON exports
 │       ├── wf0-shared-classifier.json          # WF-0: 40 nodes, 53 connections
 │       ├── wf1-gmail-trigger-template.json     # Template for Gmail triggers
@@ -150,14 +157,62 @@ gmailn8n/
 │       ├── wf2-outlook-trigger-instance-1.json # Example: myname@hotmail.com
 │       ├── wf3-spam-deletion.json              # Main orchestrator
 │       ├── wf3-spam-deletion-gmail-sub.json    # Gmail sub-workflow
-│       └── wf3-spam-deletion-outlook-sub.json  # Outlook sub-workflow
+│       ├── wf3-spam-deletion-outlook-sub.json  # Outlook sub-workflow
+│       └── wf4-initial-cleanup.json            # WF-4: one-time historical cleanup
 │
 ├── .env.example                       # All config vars documented
 ├── .gitignore                         # Ignores secrets, n8n data, temp files
 ├── tsconfig.json                      # Strict TypeScript config
-├── package.json                       # Scripts: test, build, validate:workflows
+├── package.json                       # Scripts: test, build, validate:workflows, generate:cleanup-workflow
 └── README.md
 ```
+
+---
+
+## Initial Setup — One-Time Cleanup (WF-4)
+
+**When you first set up this automation, your inbox already has hundreds or thousands of unlabeled emails.** WF-4 is a one-time cleanup workflow that processes ALL existing emails through the classifier, applying AI/* labels and marking spam. After running once, the live automation (WF-0 through WF-3) handles all new emails.
+
+### How It Works
+
+```
+Manual Trigger
+  → Gmail: Get Many (all unlabeled inbox emails)
+    → Split In Batches (10 emails at a time)
+      → Code: Build WF-0 Payload
+        → HTTP POST to WF-0 Classifier (classify + label)
+          → Code: Summary Report
+```
+
+WF-4 fetches every inbox email that does NOT already have an AI/* label, sends each batch to WF-0 for classification, and WF-0 applies the correct label. Spam receives the `AI/Spam` label — **it is NOT deleted** (WF-3 handles deletion nightly).
+
+### Running the Initial Cleanup
+
+```bash
+# 1. Generate the WF-4 workflow for your Gmail account(s)
+npm run generate:cleanup-workflow
+# → Creates src/workflows/wf4-initial-cleanup.json
+
+# 2. Import into N8N
+#    N8N → Workflows → Import from File → select wf4-initial-cleanup.json
+
+# 3. Open the imported workflow and verify:
+#    - "Gmail: Get Unlabeled Emails" shows your correct credential
+#    - "POST to WF-0 Classifier" points to your N8N instance
+
+# 4. Execute the workflow manually (click "Execute Workflow")
+#    The workflow will process all unlabeled inbox emails.
+
+# 5. Check Gmail — emails should now have AI/* labels applied.
+```
+
+### What to Expect
+
+- **Idempotent**: Re-running processes zero emails (all already labeled). Safe to run again anytime.
+- **Rate-limited**: Batch size of 10 with built-in delays respects Gmail API quotas.
+- **Multi-account**: For multiple Gmail accounts, set `GMAIL_ACCOUNTS` and `GMAIL_CREDENTIAL_NAMES` in `.env` before generating. One workflow JSON is created per account.
+- **Outlook**: Outlook initial cleanup is not yet implemented (Outlook uses a different API). Configure Outlook credentials and WF-2 will handle new emails automatically.
+- **Spam**: Labeled `AI/Spam`, then deleted by WF-3 on its nightly run (8:00 AM daily).
 
 ---
 
@@ -254,6 +309,10 @@ Extend these lists in `src/code/pre-classifier.ts` to match your inbox patterns.
 | `Split In Batches` | WF-3 | Loop accounts + batch deletes |
 | `Gmail` (Delete) | WF-3 | Permanent spam delete |
 | `Microsoft Outlook` (Delete) | WF-3 | Permanent junk delete |
+| `Manual Trigger` | WF-4 | One-time manual execution |
+| `Gmail` (Get Many) | WF-4 | Fetch all unlabeled inbox emails |
+| `HTTP Request` | WF-4 | POST each email to WF-0 for classification |
+| `Code` | WF-4 | Build WF-0 payloads + aggregate summary |
 
 ---
 
@@ -305,14 +364,22 @@ See `.env.example` for the complete list. Key variables:
 ## Testing
 
 ```bash
-npm test              # All 169 tests (code + utils)
-npm run test:code     # Code modules only (119 tests, 21 suites)
-npm run test:utils    # Utils only (37 tests, 10 suites)
+npm test                    # All 216 tests (code + utils)
+npm run test:code           # Code modules only (166 tests, 30 suites)
+npm run test:utils          # Utils only (37 tests, 10 suites)
+npm run test:initial-cleanup # WF-4 initial cleanup tests only (47 tests, 9 suites)
 ```
 
 ---
 
 ## Deployment Checklist
+
+### Phase 0 — Initial Cleanup (One-Time)
+- [ ] Run `npm run generate:cleanup-workflow` to create WF-4 JSON
+- [ ] Import **WF-4** (Initial Cleanup) into N8N
+- [ ] Execute WF-4 manually to label all existing inbox emails
+- [ ] Verify AI/* labels appear on old emails in Gmail
+- [ ] Re-execute WF-4 to confirm idempotency (0 emails processed)
 
 ### Phase 1 — Credentials
 - [ ] Gmail API project created in Google Cloud Console
@@ -326,12 +393,14 @@ npm run test:utils    # Utils only (37 tests, 10 suites)
 - [ ] All Outlook AI- categories created in each Outlook account
 
 ### Phase 2 — Build Order
-1. [ ] Import **WF-0** (Shared Classifier) → test with manual webhook POST
-2. [ ] Import **WF-1a** (first Gmail trigger) → verify labels apply
-3. [ ] Duplicate WF-1a for remaining Gmail accounts
-4. [ ] Import **WF-2a** (first Outlook trigger) → verify categories apply
-5. [ ] Duplicate WF-2a for remaining Outlook accounts
-6. [ ] Import **WF-3** (Spam deletion) → run manually first, verify
+1. [ ] Run `npm run generate:cleanup-workflow` → import **WF-4** (Initial Cleanup)
+2. [ ] Execute WF-4 manually to label all historical emails
+3. [ ] Import **WF-0** (Shared Classifier) → test with manual webhook POST
+4. [ ] Import **WF-1a** (first Gmail trigger) → verify labels apply
+5. [ ] Duplicate WF-1a for remaining Gmail accounts
+6. [ ] Import **WF-2a** (first Outlook trigger) → verify categories apply
+7. [ ] Duplicate WF-2a for remaining Outlook accounts
+8. [ ] Import **WF-3** (Spam deletion) → run manually first, verify
 
 ### Phase 3 — Testing
 - [ ] Manual POST to WF-0 webhook → verify label applied

@@ -47,3 +47,21 @@ export {
   shouldMarkRead,
   shouldArchive,
 } from './label-mapper';
+
+// Initial cleanup
+export {
+  buildGmailUnlabeledQuery,
+  buildOutlookUnlabeledFilter,
+  buildSummaryReport,
+  payloadBuilderNodeJs,
+  summaryNodeJs,
+  buildCleanupWorkflow,
+  DEFAULT_BATCH_SIZE,
+  GMAIL_PAGE_SIZE,
+  BATCH_DELAY_MS,
+} from './initial-cleanup';
+export type {
+  CleanupStats,
+  CleanupSummary,
+  CleanupWorkflowConfig,
+} from './initial-cleanup';

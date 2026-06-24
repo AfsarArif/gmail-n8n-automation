@@ -22,7 +22,7 @@ interface N8NWorkflowFile {
     name: string;
     type: string;
     typeVersion: number;
-    position: { x: number; y: number };
+    position: [number, number];
     parameters: Record<string, unknown>;
     credentials?: Record<string, unknown>;
     webhookId?: string;
@@ -50,6 +50,7 @@ const REQUIRED_NODES: Record<string, string[]> = {
   gmail_trigger:     ['gmail', 'set', 'httpRequest'],
   outlook_trigger:   ['microsoftOutlook', 'set', 'httpRequest'],
   spam_deletion:     ['scheduleTrigger', 'splitInBatches'],
+  initial_cleanup:   ['manualTrigger', 'gmail', 'splitInBatches', 'code', 'httpRequest'],
 };
 
 // ---------------------------------------------------------------------------
