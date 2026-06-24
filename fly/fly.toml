@@ -8,7 +8,7 @@ primary_region = "iad"
   image = "n8nio/n8n:latest"
 
 [[vm]]
-  memory = "512mb"
+  memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
 
@@ -32,7 +32,7 @@ primary_region = "iad"
   destination = "/home/node/.n8n"
 
 [env]
-  N8N_LISTEN_ADDRESS = "::"
+  N8N_LISTEN_ADDRESS = "0.0.0.0"
   N8N_PROTOCOL = "https"
   N8N_HOST = "angafsar.fly.dev"
   N8N_PORT = "5678"
