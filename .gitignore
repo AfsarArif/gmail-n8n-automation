@@ -1,15 +1,26 @@
-node_modules/
-dist/
-.env
-*.log
-.DS_Store
-coverage/
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
 
-# n8n local data (never commit)
-.n8n/
+# Build
+dist/
+
+# Secrets
+.env
+credentials/
+*.log
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# OS
+.DS_Store
+
+# Old n8n artifacts (cleaned up)
+node_modules/
+.n8n/
 
 # Temporary files
 /tmp/
@@ -17,8 +28,8 @@ coverage/
 *.swo
 *~
 
-# Secrets / credentials (belt-and-suspenders)
+# Credentials
 *.pem
-credentials.json
-*-credential*.json
-*-cred-final.json
+*.json
+!package.json
+!tsconfig.json
