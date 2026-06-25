@@ -37,13 +37,17 @@ def init_db(db_path: str = "emailbot.db") -> sqlite3.Connection:
     """
     Initialise the SQLite database, creating tables if they don't exist.
 
+    Uses check_same_thread=False so the connection can be shared across
+    threads (background poller + FastAPI request handlers). WAL journal
+    mode ensures safe concurrent reads.
+
     Args:
         db_path: Path to the SQLite database file.
 
     Returns:
-        A sqlite3.Connection with WAL journal mode enabled.
+        A thread-safe sqlite3.Connection with WAL journal mode enabled.
     """
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(DDL)
