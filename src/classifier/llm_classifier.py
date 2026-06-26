@@ -2,7 +2,7 @@
 DeepSeek-powered email classifier.
 
 Uses LangChain's ChatOpenAI (with DeepSeek's OpenAI-compatible API) to
-classify emails into one of seven categories.  Falls back to "fyi" on
+classify emails into one of eight categories.  Falls back to "fyi" on
 parse errors or unexpected categories.
 
 Ported from src/code/classifier.ts.
@@ -10,6 +10,7 @@ Ported from src/code/classifier.ts.
 
 import json
 import logging
+import threading
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -31,23 +32,36 @@ VALID_CATEGORIES: tuple[str, ...] = (
     "career",
     "fyi",
     "spam",
+    "otp",
 )
 
 CLASSIFICATION_SYSTEM_PROMPT = """You are an email classifier. Return valid JSON only — no markdown, no explanation, no extra text.
 
-Classify the email into exactly one category:
+Classify by the email's PRIMARY PURPOSE:
 
-- "newsletter":   Blog digests, editorial content, curated reading lists, publication emails
-- "action":       Requires a direct reply or response (questions, requests, meeting invites, tasks)
-- "social":       Notifications from social platforms (LinkedIn, Twitter/X, Facebook, Instagram, Reddit, GitHub, Discord)
-- "promotions":   Sales, discount codes, limited-time offers, marketing campaigns, product launches
-- "career":       Job postings, recruiter outreach, interview requests, application updates, job alerts
-- "fyi":          Receipts, order confirmations, shipping updates, account notifications, no reply needed
-- "spam":         Junk mail, phishing, irrelevant unsolicited bulk mail
+- "otp":          One-time passcodes, verification codes, 2FA login tokens, account confirmation codes
+- "action":       Requires a direct reply or response — questions, meeting invites, tasks, requests for information
+- "social":       Social interaction alerts — likes, comments, follows, connection requests, mentions, DMs, group activity
+- "promotions":   Marketing or sales content from ANY sender — discount codes, limited-time offers, product launches, seasonal sales, brand campaigns, "shop now" CTAs
+- "career":       Job postings, recruiter outreach, interview requests, application status updates, job alerts
+- "newsletter":   Editorial content — blog digests, curated reading lists, publication emails, long-form articles
+- "fyi":          Transactional notifications — receipts, order confirmations, shipping updates, password resets, account alerts, no-reply notifications
+- "spam":         Junk mail, phishing attempts, unsolicited bulk, obvious scams
+
+CRITICAL RULES:
+1. **Content beats sender.** A marketing email from LinkedIn is "promotions", not "social". An order confirmation from Nike is "fyi", not "promotions".
+2. **"social" is ONLY for interaction alerts.** "Follow us on Instagram" inside a brand email does NOT make it social. Social means: someone liked your post, commented, sent a connection request, mentioned you, invited you to a group, etc.
+3. **Gmail labels are strong hints:**
+   - CATEGORY_PROMOTIONS → almost certainly "promotions"
+   - CATEGORY_SOCIAL → "social" only if about interactions; if it promotes a product/service → "promotions"
+   - CATEGORY_UPDATES → likely "fyi" or "newsletter"
+   - IMPORTANT → never "spam", prefer "action" or "fyi"
+4. **Newsletter vs Promotions:** If the email promotes a product/service/sale → "promotions". If purely editorial/educational → "newsletter".
+5. **FYI vs Promotions:** Receipts, order confirmations, shipping notifications → "fyi" (even from retailers). Marketing content from retailers → "promotions".
 
 Return exactly this JSON:
 {
-  "category": "newsletter|action|social|promotions|career|fyi|spam"
+  "category": "newsletter|action|social|promotions|career|fyi|spam|otp"
 }"""
 
 # ─────────────────────────────────────────────
@@ -55,20 +69,23 @@ Return exactly this JSON:
 # ─────────────────────────────────────────────
 
 _llm: ChatOpenAI | None = None
+_llm_lock = threading.Lock()
 
 
 def _get_llm() -> ChatOpenAI:
-    """Lazy-initialise the DeepSeek LLM client."""
+    """Lazy-initialise the DeepSeek LLM client (thread-safe)."""
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=settings.deepseek_model,
-            base_url=settings.deepseek_base_url,
-            api_key=settings.deepseek_api_key,
-            temperature=settings.deepseek_temperature,
-            max_tokens=settings.deepseek_max_tokens,
-        )
-        logger.info("Initialised LLM: model=%s base_url=%s", settings.deepseek_model, settings.deepseek_base_url)
+        with _llm_lock:
+            if _llm is None:
+                _llm = ChatOpenAI(
+                    model=settings.deepseek_model,
+                    base_url=settings.deepseek_base_url,
+                    api_key=settings.deepseek_api_key,
+                    temperature=settings.deepseek_temperature,
+                    max_tokens=settings.deepseek_max_tokens,
+                )
+                logger.info("Initialised LLM: model=%s base_url=%s", settings.deepseek_model, settings.deepseek_base_url)
     return _llm
 
 
@@ -77,18 +94,30 @@ def _get_llm() -> ChatOpenAI:
 # ─────────────────────────────────────────────
 
 
-def build_classification_prompt(from_addr: str, subject: str, body_preview: str) -> str:
+def build_classification_prompt(
+    from_addr: str,
+    subject: str,
+    body_preview: str,
+    existing_label_ids: list[str] | None = None,
+) -> str:
     """Build the user-facing prompt from email fields.
 
     Args:
         from_addr: The ``From:`` header value.
         subject: The ``Subject:`` header value.
-        body_preview: First ~300 characters of the plain-text body.
+        body_preview: First ~600 characters of the plain-text body.
+        existing_label_ids: Optional list of Gmail label IDs already on the email.
 
     Returns:
         A plain-text prompt string.
     """
-    return f"From: {from_addr}\nSubject: {subject}\nBody preview: {body_preview}"
+    prompt = f"From: {from_addr}\nSubject: {subject}\nBody preview: {body_preview}"
+    if existing_label_ids:
+        # Filter to only show relevant system labels (not AI/* labels)
+        system_labels = [l for l in existing_label_ids if not l.startswith("AI/")]
+        if system_labels:
+            prompt += f"\nGmail system labels: {', '.join(system_labels)}"
+    return prompt
 
 
 def normalize_category(raw: str) -> str:
@@ -118,13 +147,14 @@ def force_clear_llm() -> None:
 # ─────────────────────────────────────────────
 
 
-def classify(from_addr: str, subject: str, body_preview: str) -> str:
+def classify(from_addr: str, subject: str, body_preview: str, existing_label_ids: list[str] | None = None) -> str:
     """Run DeepSeek classification on email fields.
 
     Args:
         from_addr: The ``From:`` header value.
         subject: The ``Subject:`` header value.
         body_preview: First ~300 characters of the plain-text body.
+        existing_label_ids: Optional list of Gmail label IDs already on the email.
 
     Returns:
         Normalised category string (one of ``VALID_CATEGORIES``).
@@ -133,7 +163,7 @@ def classify(from_addr: str, subject: str, body_preview: str) -> str:
 
     messages = [
         SystemMessage(content=CLASSIFICATION_SYSTEM_PROMPT),
-        HumanMessage(content=build_classification_prompt(from_addr, subject, body_preview)),
+        HumanMessage(content=build_classification_prompt(from_addr, subject, body_preview, existing_label_ids)),
     ]
 
     try:

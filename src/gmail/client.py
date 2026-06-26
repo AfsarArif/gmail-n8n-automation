@@ -7,6 +7,7 @@ list messages, get message details, apply/remove labels, mark read, archive, tra
 
 import base64
 import logging
+import threading
 from email.header import decode_header
 from email.parser import BytesParser
 from email.policy import default as default_policy
@@ -23,14 +24,17 @@ logger = logging.getLogger(__name__)
 
 # Lazy-initialised singletons
 _GMAIL_SERVICE = None
+_service_lock = threading.Lock()
 
 
 def get_service():
     """Return the cached Gmail API service instance, creating it on first call."""
     global _GMAIL_SERVICE
     if _GMAIL_SERVICE is None:
-        creds = get_credentials()
-        _GMAIL_SERVICE = build("gmail", "v1", credentials=creds)
+        with _service_lock:
+            if _GMAIL_SERVICE is None:
+                creds = get_credentials()
+                _GMAIL_SERVICE = build("gmail", "v1", credentials=creds)
     return _GMAIL_SERVICE
 
 
@@ -94,6 +98,7 @@ def list_unlabeled_messages(
         "-label:AI/Promotions "
         "-label:AI/Career "
         "-label:AI/FYI "
+        "-label:AI/OTP "
         "-label:AI/Spam"
     )
     return _list_messages(query, max_results, page_token)
@@ -105,17 +110,30 @@ def list_spam_messages(
     page_token: Optional[str] = None,
 ) -> tuple[list[dict], Optional[str]]:
     """
-    List spam-labelled messages older than N days.
+    List spam-labelled messages, optionally older than N days.
 
     Args:
         older_than_days: Only return messages older than this many days.
+                         Use 0 to return ALL spam regardless of age.
         max_results: Maximum messages per page.
         page_token: Token for the next page, or None for first page.
 
     Returns:
         Tuple of (messages list, next_page_token or None).
     """
-    query = f"label:spam older_than:{older_than_days}d"
+    if older_than_days > 0:
+        query = f"label:spam older_than:{older_than_days}d"
+    else:
+        query = "label:spam"
+    return _list_messages(query, max_results, page_token)
+
+
+def list_ai_spam_messages(
+    max_results: int = 50,
+    page_token: Optional[str] = None,
+) -> tuple[list[dict], Optional[str]]:
+    """List messages with the AI/Spam label for deletion."""
+    query = "label:AI/Spam"
     return _list_messages(query, max_results, page_token)
 
 
@@ -193,16 +211,9 @@ def _parse_message(raw_msg: dict) -> Optional[GmailMessage]:
     label_ids = raw_msg.get("labelIds", [])
     internal_date = raw_msg.get("internalDate", "")
 
-    # Parse headers from payload
-    headers = {}
     payload = raw_msg.get("payload", {})
-    for header in payload.get("headers", []):
-        name = header.get("name", "").lower()
-        value = header.get("value", "")
-        headers[name] = value
-
-    from_address = _decode_header(headers.get("from", ""))
-    subject = _decode_header(headers.get("subject", "(no subject)"))
+    from_address = ""
+    subject = "(no subject)"
 
     # Extract body
     body_plain = ""
@@ -212,6 +223,8 @@ def _parse_message(raw_msg: dict) -> Optional[GmailMessage]:
             raw_bytes = base64.urlsafe_b64decode(raw_base64)
             msg = BytesParser(policy=default_policy).parsebytes(raw_bytes)
             body_plain = _extract_body(msg)
+            from_address = _decode_header(msg.get("From", ""))
+            subject = _decode_header(msg.get("Subject", "(no subject)"))
         except Exception as exc:
             logger.warning("Failed to parse raw body for %s: %s", msg_id, exc)
             body_plain = _extract_snippet(payload)

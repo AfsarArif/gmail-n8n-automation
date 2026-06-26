@@ -2,7 +2,7 @@
 Gmail label management.
 
 Maintains a cached mapping of label name → label ID, with automatic
-refresh. Provides ensure_labels_exist() to create the 7 AI/* labels
+refresh. Provides ensure_labels_exist() to create the 8 AI/* labels
 if they don't already exist.
 """
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Label definitions
 # ─────────────────────────────────────────────
 
-# The seven AI classification labels (Gmail format: AI/CategoryName)
+# The eight AI classification labels (Gmail format: AI/CategoryName)
 AI_LABELS: dict[str, str] = {
     "newsletter": "AI/Newsletter",
     "action": "AI/Action-Required",
@@ -30,6 +30,7 @@ AI_LABELS: dict[str, str] = {
     "career": "AI/Career",
     "fyi": "AI/FYI",
     "spam": "AI/Spam",
+    "otp": "AI/OTP",
 }
 
 # Category → full label name (reverse map of AI_LABELS values → keys)
@@ -124,7 +125,7 @@ def force_refresh_labels() -> dict[str, str]:
 
 def ensure_labels_exist() -> dict[str, str]:
     """
-    Ensure all 7 AI/* labels exist in Gmail, creating any that are missing.
+    Ensure all 8 AI/* labels exist in Gmail, creating any that are missing.
 
     Returns:
         Dict mapping category key → label ID for all AI labels.
@@ -189,5 +190,6 @@ def _label_color(category: str) -> dict:
         "career": {"backgroundColor": "#d3e5d0", "textColor": "#1a3d1a"},     # Green
         "fyi": {"backgroundColor": "#e8eaed", "textColor": "#3a3a3a"},        # Grey
         "spam": {"backgroundColor": "#f28b82", "textColor": "#3a0000"},       # Dark red
+        "otp": {"backgroundColor": "#fde0c2", "textColor": "#5c3000"},       # Amber/Orange
     }
     return colors.get(category, {"backgroundColor": "#e8eaed", "textColor": "#3a3a3a"})

@@ -47,11 +47,12 @@ def llm_classify_node(state: EmailState) -> dict:
     Returns:
         Dict with ``llm_category`` key.
     """
-    body_preview = state.get("body_plain", "")[:300]
+    body_preview = state.get("body_plain", "")[:600]
     cat = llm_classify(
         state["from_address"],
         state["subject"],
         body_preview,
+        state.get("existing_label_ids", []),
     )
     logger.debug("LLM classify → %s", cat)
     return {"llm_category": cat}
@@ -76,6 +77,18 @@ def normalize_node(state: EmailState) -> dict:
         or state.get("llm_category")
         or settings.default_fallback_category
     )
+    # Safety net: Gmail IMPORTANT emails must never be classified as spam or promotions
+    # (promotions get auto-archived, which hides important mail from the user)
+    important_labels = {"IMPORTANT"}
+    existing = set(state.get("existing_label_ids", []))
+    if important_labels & existing:
+        if final == "spam":
+            logger.info("Overriding spam->fyi for IMPORTANT email %s", state.get("message_id"))
+            final = "fyi"
+        elif final == "promotions":
+            logger.info("Overriding promotions->fyi for IMPORTANT email %s", state.get("message_id"))
+            final = "fyi"
+
     logger.debug("Final category: %s", final)
     return {"final_category": final}
 
@@ -103,8 +116,9 @@ def apply_gmail_node(state: EmailState) -> dict:
 
     *   **Label**: All categories get their ``AI/<Category>`` label applied.
     *   **Mark read**: Applied to every category EXCEPT ``action`` and
-        ``career``.
-    *   **Archive**: Applied ONLY to ``promotions``.
+        ``career`` (so ``otp``, ``social``, ``promotions``, ``newsletter``,
+        ``fyi``, and ``spam`` are all marked read).
+    *   **Archive**: Applied ONLY to ``promotions`` (``otp`` is NOT archived).
 
     Args:
         state: Current email state.

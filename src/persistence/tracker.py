@@ -6,6 +6,7 @@ tracks poller metadata like last-run timestamps.
 """
 
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -17,11 +18,13 @@ logger = logging.getLogger(__name__)
 _conn: sqlite3.Connection | None = None
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection(db_path: str | None = None) -> sqlite3.Connection:
     """Return the shared SQLite connection, initialising if needed."""
     global _conn
     if _conn is None:
-        _conn = init_db()
+        if db_path is None:
+            db_path = "/data/emailbot.db" if os.path.isdir("/data") else "emailbot.db"
+        _conn = init_db(db_path)
     return _conn
 
 
@@ -130,3 +133,85 @@ def update_last_poll_time() -> None:
 def get_last_poll_time() -> str:
     """Get the last poll timestamp, or empty string if never polled."""
     return get_metadata("last_poll_time", "")
+
+
+# ─────────────────────────────────────────────
+# Correction tracking (user re-labels in Gmail)
+# ─────────────────────────────────────────────
+
+
+def record_correction(
+    message_id: str,
+    from_domain: str,
+    original_category: str,
+    detected_label: str,
+) -> None:
+    """Record a detected label correction (user manually re-labeled in Gmail)."""
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO corrections
+            (message_id, from_domain, original_category, detected_label)
+        VALUES (?, ?, ?, ?)
+        """,
+        (message_id, from_domain, original_category, detected_label),
+    )
+    conn.commit()
+
+
+def get_corrections_for_domain(from_domain: str, limit: int = 10) -> list[dict]:
+    """Get correction history for a sender domain."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT message_id, original_category, detected_label, detected_at
+        FROM corrections
+        WHERE from_domain = ?
+        ORDER BY detected_at DESC
+        LIMIT ?
+        """,
+        (from_domain, limit),
+    ).fetchall()
+    return [
+        {
+            "message_id": row[0],
+            "original_category": row[1],
+            "detected_label": row[2],
+            "detected_at": row[3],
+        }
+        for row in rows
+    ]
+
+
+def get_learned_domains(min_corrections: int = 2) -> dict[str, str]:
+    """
+    Return domains with enough consistent corrections to auto-update pre-classifier.
+
+    Returns {domain: corrected_category} for domains where >=min_corrections
+    corrections all point to the same new category.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT from_domain, detected_label, COUNT(*) as cnt
+        FROM corrections
+        GROUP BY from_domain, detected_label
+        HAVING cnt >= ?
+        ORDER BY cnt DESC
+        """,
+        (min_corrections,),
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def get_correction_count(days: int = 7) -> int:
+    """Count corrections detected in the last N days."""
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT COUNT(*) FROM corrections
+        WHERE detected_at >= datetime('now', ?)
+        """,
+        (f"-{days} days",),
+    ).fetchone()
+    return row[0] if row else 0

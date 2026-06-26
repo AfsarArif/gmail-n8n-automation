@@ -6,13 +6,14 @@ from src.config import settings
 from src.gmail.client import list_unlabeled_messages, get_message
 from src.graph.workflow import email_graph
 from src.graph.state import EmailState
-from src.persistence.tracker import is_processed, mark_processed, update_last_poll_time, get_processed_count
+from src.persistence.tracker import is_processed, mark_processed, update_last_poll_time, get_processed_count, purge_old_entries
 
 logger = logging.getLogger(__name__)
 
 def poll_once() -> int:
     """Fetch and classify one batch of unlabeled emails. Returns count processed."""
     messages, next_token = list_unlabeled_messages(max_results=10)
+    update_last_poll_time()
     if not messages:
         logger.info("No unlabeled messages found")
         return 0
@@ -48,6 +49,12 @@ def poll_once() -> int:
 
         try:
             result = email_graph.invoke(state)
+            if result.get("error"):
+                logger.error(
+                    "Label apply failed for %s (category=%s): %s — skipping mark_processed for retry",
+                    msg_id, result.get("final_category", "?"), result["error"],
+                )
+                continue
             category = result.get("final_category", "fyi")
             mark_processed(msg_id, thread_id, category, gmail_msg.from_address, gmail_msg.subject)
             processed += 1
@@ -55,7 +62,6 @@ def poll_once() -> int:
         except Exception as exc:
             logger.error("Failed to classify %s: %s", msg_id, exc)
 
-    update_last_poll_time()
     return processed
 
 def run_poller() -> None:

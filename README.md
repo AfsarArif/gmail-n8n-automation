@@ -88,6 +88,7 @@ Automatically classify and label incoming emails across multiple Gmail and Outlo
 | `promotions` | `AI/Promotions` | `AI-Promotions` | Mark read + Archive |
 | `career` | `AI/Career` | `AI-Career` | Keep unread, stay in inbox |
 | `fyi` | `AI/FYI` | `AI-FYI` | Mark read, stay in inbox |
+| `otp` | `AI/OTP` | `AI-OTP` | Keep unread, stay in inbox |
 | `spam` | `AI/Spam` | `AI-Spam` | Deleted nightly by WF-3 |
 
 ---
@@ -251,13 +252,13 @@ npm run generate:cleanup-workflow
 **Gmail** — log into each Gmail account and create:
 ```
 AI/Newsletter   AI/Action-Required   AI/Social   AI/Promotions
-AI/Career       AI/FYI               AI/Spam
+AI/Career       AI/FYI               AI/OTP     AI/Spam
 ```
 
 **Outlook** — Outlook web → Categorize → Manage categories → New:
 ```
 AI-Newsletter   AI-Action   AI-Social   AI-Promotions
-AI-Career       AI-FYI       AI-Spam
+AI-Career       AI-FYI       AI-OTP     AI-Spam
 ```
 
 ---

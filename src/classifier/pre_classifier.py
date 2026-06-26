@@ -15,6 +15,20 @@ from typing import Optional
 # Domain rule sets
 # ─────────────────────────────────────────────
 
+# ── OTP / one-time passcode senders ──────────────────────────────
+OTP_DOMAINS: tuple[str, ...] = (
+    "authy",
+    "twilio",
+    "okta",
+    "duo",
+    "login.gov",
+    "signin.aws",
+    "id.me",
+    "onelogin",
+    "microsoftonline",
+    "accounts.google",
+)
+
 SOCIAL_DOMAINS: tuple[str, ...] = (
     "linkedin.com",
     "twitter.com",
@@ -26,6 +40,22 @@ SOCIAL_DOMAINS: tuple[str, ...] = (
     "discord.com",
     "meetup.com",
     "slack.com",
+)
+
+PROMOTIONS_DOMAINS: tuple[str, ...] = (
+    # Watch / accessory brands
+    "timex.com", "fossil.com", "casio.com", "citizenwatch.com",
+    # Apparel / athletic
+    "gap.com", "oldnavy.com", "nike.com", "adidas.com", "underarmour.com",
+    "uniqlo.com", "hm.com",
+    # Department stores
+    "nordstrom.com", "macys.com", "bloomingdales.com",
+    # Beauty
+    "sephora.com", "ulta.com",
+    # Big-box
+    "target.com", "walmart.com", "costco.com",
+    # DTC / deal sites
+    "etsy.com", "groupon.com",
 )
 
 CAREER_DOMAINS: tuple[str, ...] = (
@@ -71,7 +101,9 @@ NEWSLETTER_DOMAINS: tuple[str, ...] = (
 # ─────────────────────────────────────────────
 
 DOMAIN_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (OTP_DOMAINS, "otp"),
     (SOCIAL_DOMAINS, "social"),
+    (PROMOTIONS_DOMAINS, "promotions"),
     (CAREER_DOMAINS, "career"),
     (FYI_DOMAINS, "fyi"),
     (NEWSLETTER_DOMAINS, "newsletter"),
@@ -101,7 +133,7 @@ def pre_classify(from_address: str) -> PreClassifyResult:
     """
     Classify an email by sender domain alone.
 
-    Rules are evaluated in order (social → career → fyi → newsletter).
+    Rules are evaluated in order (otp → social → promotions → career → fyi → newsletter).
     The **first** matching rule wins. If no domain matches we return
     ``category=None, skip_ai=False`` so the caller falls through to the
     DeepSeek path.

@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS metadata (
     value           TEXT NOT NULL,
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS corrections (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id          TEXT NOT NULL,
+    from_domain         TEXT NOT NULL,
+    original_category   TEXT NOT NULL,
+    detected_label      TEXT NOT NULL,
+    detected_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_corrections_domain
+    ON corrections(from_domain);
 """
 
 

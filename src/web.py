@@ -9,9 +9,11 @@ new incoming emails on a configurable interval.
 Deployed on Fly.io at https://emailbot.fly.dev
 """
 
+import asyncio
 import logging
 import os
 import threading
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Shared secret for API authentication (set via Fly.io secrets)
 API_SECRET = os.environ.get("API_SECRET", "")
 # Require secret in production, allow empty for local development
-if not API_SECRET and os.path.exists("/data"):
+if not API_SECRET and os.environ.get("FLY_APP_NAME"):
     raise RuntimeError(
         "API_SECRET environment variable is required in production. Set it via: "
         "fly secrets set API_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -68,6 +70,53 @@ def _background_poller() -> None:
 
 _poller_thread: threading.Thread | None = None
 
+# ─────────────────────────────────────────────
+# Cleanup progress tracking (shared state for dashboard polling)
+# ─────────────────────────────────────────────
+
+_cleanup_lock = threading.Lock()
+_cleanup_status = {
+    "running": False,
+    "batch": 0,
+    "batch_processed": 0,
+    "batch_total": 0,
+    "total_processed": 0,
+    "log_messages": [],
+    "finished": False,
+    "error": None,
+}
+
+
+def _make_cleanup_callback():
+    """Return a callback that updates _cleanup_status with batch progress."""
+    def cb(event: dict):
+        with _cleanup_lock:
+            if event["event"] == "batch_start":
+                _cleanup_status["batch"] = event["batch"]
+                _cleanup_status["batch_processed"] = 0
+                _cleanup_status["batch_total"] = event.get("total_in_batch", 0)
+                msg = f"Starting batch {event['batch']} ({_cleanup_status['batch_total']} unlabeled emails)..."
+                _cleanup_status["log_messages"].append(msg)
+                logger.info(msg)
+            elif event["event"] == "batch_done":
+                _cleanup_status["batch_processed"] = event["processed"]
+                _cleanup_status["batch_total"] = event["total_in_batch"]
+                _cleanup_status["total_processed"] = event["running_total"]
+                skipped = event["total_in_batch"] - event["processed"]
+                msg = f"Batch {event['batch']} complete: {event['processed']}/{event['total_in_batch']} emails processed (skipped {skipped}). Running total: {event['running_total']}"
+                _cleanup_status["log_messages"].append(msg)
+                logger.info(msg)
+            elif event["event"] == "error":
+                _cleanup_status["log_messages"].append(f"ERROR: {event['message']}")
+            elif event["event"] == "finished":
+                _cleanup_status["running"] = False
+                _cleanup_status["finished"] = True
+                _cleanup_status["total_processed"] = event["total"]
+                msg = f"Cleanup finished: {event['total']} emails classified"
+                _cleanup_status["log_messages"].append(msg)
+                logger.info(msg)
+    return cb
+
 
 def start_poller() -> None:
     """Start the background poller if enabled and not already running."""
@@ -92,6 +141,15 @@ async def lifespan(app: FastAPI):
     """Startup: verify configuration, ensure data directory exists, start poller."""
     os.makedirs("/data", exist_ok=True)
     logger.info("EmailBot web server starting (redirect_uri=%s)", REDIRECT_URI)
+
+    # Auto-create any missing Gmail labels (idempotent — skips existing ones)
+    from src.gmail.labels import ensure_labels_exist
+    try:
+        labels = ensure_labels_exist()
+        logger.info("Gmail labels verified: %d labels ready", len(labels))
+    except Exception as exc:
+        logger.warning("Could not verify Gmail labels on startup: %s", exc)
+
     start_poller()
     yield
     logger.info("EmailBot web server shutting down")
@@ -133,7 +191,12 @@ def _get_redirect_uri(request: Request) -> str:
 @app.get("/")
 async def root():
     """Health check."""
-    return {"status": "ok", "service": "EmailBot", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "service": "EmailBot",
+        "version": "1.0.0",
+        "auto_poll": os.environ.get("EMAILBOT_AUTO_POLL", "true"),
+    }
 
 
 @app.get("/auth-status")
@@ -167,18 +230,26 @@ async def callback(request: Request, code: str = Query(...), state: str = Query(
     redirect_uri = _get_redirect_uri(request)
     try:
         exchange_code(code, oauth_state=state, redirect_uri=redirect_uri)
+        # Create AI/* labels now that we have valid credentials
+        from src.gmail.labels import ensure_labels_exist
+        try:
+            labels = ensure_labels_exist()
+            logger.info("Labels verified post-auth: %d labels ready", len(labels))
+        except Exception as exc:
+            logger.warning("Could not verify labels post-auth: %s", exc)
         return HTMLResponse("""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EmailBot — Authenticated</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzc4NTFBOSIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMCIgZmlsbD0id2hpdGUiPuKciTwvdGV4dD48L3N2Zz4=">
 <style>
-  body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9;
+  body { font-family: system-ui, sans-serif; background: #FFF8F0; color: #2D2D2D;
          display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
   .box { text-align: center; max-width: 500px; padding: 40px; }
-  h1 { color: #3fb950; }
-  a { color: #58a6ff; }
+  h1 { color: #2E7D32; }
+  a { color: #7851A9; }
 </style>
 </head>
 <body>
@@ -207,31 +278,33 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EmailBot — Dashboard</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzc4NTFBOSIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMCIgZmlsbD0id2hpdGUiPuKciTwvdGV4dD48L3N2Zz4=">
 <style>
-  :root { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+  :root { font-family: system-ui, sans-serif; background: #FFF8F0; color: #2D2D2D; }
   body { max-width: 720px; margin: 0 auto; padding: 24px; }
   h1 { font-size: 1.5rem; margin: 0 0 8px; }
-  .subtitle { color: #8b949e; margin: 0 0 24px; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-  .card h2 { margin: 0 0 12px; font-size: 1rem; color: #58a6ff; }
+  .subtitle { color: #8D7B6B; margin: 0 0 24px; }
+  .card { background: #FFFFFF; border: 1px solid #E0D8D0; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 1rem; color: #7851A9; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .stat { flex: 1; min-width: 130px; }
-  .stat .label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; }
+  .stat .label { font-size: 0.75rem; color: #8D7B6B; text-transform: uppercase; }
   .stat .value { font-size: 1.5rem; font-weight: 700; }
-  .green { color: #3fb950; }
-  .yellow { color: #d29922; }
-  .red { color: #f85149; }
+  .green { color: #2E7D32; }
+  .yellow { color: #E67E00; }
+  .red { color: #C62828; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
-  .badge-on { background: #1b3a2a; color: #3fb950; }
-  .badge-off { background: #3a1b1b; color: #f85149; }
-  button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; margin: 4px; }
-  button:hover { background: #30363d; }
-  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-  button.danger { color: #f85149; }
-  input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; width: 280px; }
+  .badge-on { background: #EDE7F6; color: #7851A9; }
+  .badge-off { background: #FFEBEE; color: #C62828; }
+  button { background: #F0EAE0; color: #2D2D2D; border: 1px solid #D0C8C0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; margin: 4px; }
+  button:hover { background: #E0D8D0; }
+  button.primary { background: #7851A9; border-color: #7851A9; color: #FFFFFF; }
+  button.primary:hover { background: #6B3FA0; }
+  button.danger { color: #C62828; }
+  input { background: #FFFFFF; color: #2D2D2D; border: 1px solid #D0C8C0; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; width: 280px; }
   .secret-row { display: flex; align-items: center; gap: 8px; }
-  #log { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; }
-  .refresh { text-align: right; font-size: 0.75rem; color: #484f58; margin-top: 8px; }
+  #log { background: #FFF8F0; border: 1px solid #E0D8D0; border-radius: 6px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; color: #2D2D2D; }
+  .refresh { text-align: right; font-size: 0.75rem; color: #B8A898; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -245,7 +318,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <button onclick="setSecret()">Set</button>
     <span id="secret-status" style="font-size:0.8rem"></span>
   </div>
-  <small style="color:#8b949e">Stored in your browser's session only. Never sent to the server.</small>
+  <small style="color:#8D7B6B">Stored in your browser's session only. Never sent to the server.</small>
 </div>
 
 <div class="row">
@@ -268,7 +341,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div id="log">Loading...</div>
 </div>
 
-<p class="refresh">Auto-refresh every 10s &middot; <a href="/" style="color:#58a6ff">API</a></p>
+<p class="refresh">Auto-refresh every 10s &middot; <a href="/" style="color:#7851A9">API</a></p>
 
 <script>
 // Secret is stored in sessionStorage (client-side only, never embedded in HTML)
@@ -281,7 +354,7 @@ function setSecret() {
     SECRET = s;
     sessionStorage.setItem('emailbot_secret', s);
     document.getElementById('secret-status').textContent = 'Saved';
-    document.getElementById('secret-status').style.color = '#3fb950';
+    document.getElementById('secret-status').style.color = '#2E7D32';
     inp.value = '';
     load();
   }
@@ -291,7 +364,7 @@ function setSecret() {
 if (SECRET) {
   document.getElementById('secret-input').placeholder = 'Secret is set (' + SECRET.substring(0, 8) + '...)';
   document.getElementById('secret-status').textContent = 'Stored in session';
-  document.getElementById('secret-status').style.color = '#58a6ff';
+  document.getElementById('secret-status').style.color = '#7851A9';
 }
 
 function fmt(iso) { if(!iso) return 'never'; return new Date(iso).toLocaleTimeString(); }
@@ -329,38 +402,135 @@ async function load() {
     badge.className = 'badge ' + (active ? 'badge-on' : 'badge-off');
   } catch(e) {}
 
-  // Activity log
-  const el = document.getElementById('log');
-  const now = new Date().toLocaleTimeString();
-  const today = document.getElementById('today').textContent;
-  logs.unshift(now);
-  if (logs.length > 50) logs.pop();
-  el.innerHTML = logs.map(function(t) { return '<span class="time">' + t + '</span>  Dashboard refreshed (today: ' + today + ')'; }).join('\n');
+  // Activity log — show cleanup progress if running, otherwise show refresh
+  var el = document.getElementById('log');
+  var now = new Date().toLocaleTimeString();
+  var today = document.getElementById('today').textContent;
+
+  if (!_cleanupPollTimer) {
+    // No cleanup running — show normal refresh entry
+    logs.unshift(now);
+    if (logs.length > 50) logs.pop();
+    el.innerHTML = logs.map(function(t) { return '<span class="time">' + t + '</span>  Dashboard refreshed (today: ' + today + ')'; }).join('\n');
+  }
+  // If _cleanupPollTimer is active, pollCleanupStatus() manages the log — don't overwrite
 }
 
 async function action(cmd) {
   if (!SECRET) {
     document.getElementById('action-status').textContent = 'Set your API secret first';
-    document.getElementById('action-status').style.color = '#f85149';
+    document.getElementById('action-status').style.color = '#C62828';
     return;
   }
   var status = document.getElementById('action-status');
-  status.textContent = 'Running...';
-  status.style.color = '#d29922';
-  try {
-    var r = await fetch('/dashboard/action/' + cmd, {
-      method: 'POST',
-      headers: {'X-Dashboard-Secret': SECRET}
-    });
-    var j = await r.json();
-    var n = j.processed || j.deleted || 0;
-    status.textContent = 'Done: ' + n + ' email(s)';
-    status.style.color = '#3fb950';
-    load();
-  } catch(e) {
-    status.textContent = 'Failed: ' + e.message;
-    status.style.color = '#f85149';
+  status.textContent = 'Starting...';
+  status.style.color = '#E67E00';
+
+  if (cmd === 'cleanup') {
+    try {
+      var r = await fetch('/dashboard/action/' + cmd, {
+        method: 'POST',
+        headers: {'X-Dashboard-Secret': SECRET}
+      });
+      var j = await r.json();
+      if (j.status === 'started') {
+        status.textContent = 'Cleanup running...';
+        status.style.color = '#E67E00';
+        pollCleanupStatus();
+      } else if (j.status === 'error') {
+        status.textContent = j.detail;
+        status.style.color = '#C62828';
+      }
+    } catch(e) {
+      status.textContent = 'Failed: ' + e.message;
+      status.style.color = '#C62828';
+    }
+  } else {
+    // poll and spam-delete are fast — keep synchronous
+    try {
+      var r = await fetch('/dashboard/action/' + cmd, {
+        method: 'POST',
+        headers: {'X-Dashboard-Secret': SECRET}
+      });
+      var j = await r.json();
+      var n = j.processed || j.deleted || 0;
+      status.textContent = 'Done: ' + n + ' email(s)';
+      status.style.color = '#2E7D32';
+      load();
+    } catch(e) {
+      status.textContent = 'Failed: ' + e.message;
+      status.style.color = '#C62828';
+    }
   }
+}
+
+var _cleanupPollTimer = null;
+
+function pollCleanupStatus() {
+  if (_cleanupPollTimer) clearTimeout(_cleanupPollTimer);
+  fetch('/dashboard/cleanup-status')
+    .then(function(r) { return r.json(); })
+    .then(function(s) {
+      // Activity log: single loading line while running, final result on finish
+      var el = document.getElementById('log');
+      var now = new Date().toLocaleTimeString();
+
+      if (s.running) {
+        // Single loading line that updates inline — doesn't flood
+        var progressMsg = 'Cleanup running...';
+        if (s.batch > 0) {
+          progressMsg = 'Cleanup in progress — Batch ' + s.batch + ': ' + s.batch_processed + '/' + s.batch_total + ' (total: ' + s.total_processed + ')';
+        }
+        var loadingLine = '<span class="time">' + now + '</span>  ' + progressMsg;
+        var keep = logs.length > 0 ? logs.slice(0, 49) : [];
+        logs = [loadingLine].concat(keep).slice(0, 50);
+        el.innerHTML = logs.join('\n');
+      } else if (s.finished) {
+        // Done — post one final result line
+        var resultMsg;
+        if (s.error) {
+          // Show first line of error only (full traceback in server logs)
+          var errFirstLine = s.error.split('\n')[0];
+          resultMsg = 'Cleanup error: ' + errFirstLine.substring(0, 200);
+        } else if (s.total_processed > 0) {
+          resultMsg = 'Cleanup complete: ' + s.total_processed + ' emails classified';
+        } else {
+          resultMsg = 'Cleanup complete: no unlabeled emails found';
+        }
+        logs.unshift('<span class="time">' + now + '</span>  ' + resultMsg);
+        if (logs.length > 50) logs.pop();
+        el.innerHTML = logs.join('\n');
+      }
+
+      // Update status bar
+      var status = document.getElementById('action-status');
+      if (s.running) {
+        if (s.batch > 0) {
+          status.textContent = 'Batch ' + s.batch + ': ' + s.batch_processed + '/' + s.batch_total + ' (total: ' + s.total_processed + ')';
+        } else {
+          status.textContent = 'Scanning for unlabeled emails...';
+        }
+        status.style.color = '#E67E00';
+        _cleanupPollTimer = setTimeout(pollCleanupStatus, 2000);
+      } else if (s.finished) {
+        if (s.total_processed > 0 || s.error) {
+          status.textContent = 'Done: ' + s.total_processed + ' email(s)';
+        } else {
+          status.textContent = 'No unlabeled emails found';
+        }
+        status.style.color = s.error ? '#C62828' : '#2E7D32';
+        // Don't call load() immediately — it would overwrite the cleanup log
+        // with a generic refresh line. Let the user see results first.
+        setTimeout(function() { load(); }, 1500);
+        _cleanupPollTimer = null;
+      } else {
+        // Edge case: neither running nor finished — keep polling
+        _cleanupPollTimer = setTimeout(pollCleanupStatus, 2000);
+      }
+    })
+    .catch(function(e) {
+      _cleanupPollTimer = setTimeout(pollCleanupStatus, 5000);
+    });
 }
 
 load();
@@ -380,11 +550,13 @@ async def dashboard():
 async def dashboard_stats():
     """Public read-only stats for the dashboard (no secret required)."""
     try:
-        from src.persistence.tracker import get_processed_count, get_last_poll_time
+        from src.persistence.tracker import get_processed_count, get_last_poll_time, get_correction_count, get_learned_domains
         return {
             "processed_today": get_processed_count(days=1),
             "processed_week": get_processed_count(days=7),
             "last_poll": get_last_poll_time(),
+            "corrections_detected": get_correction_count(days=7),
+            "learned_domains": len(get_learned_domains()),
         }
     except Exception as exc:
         logger.error("Dashboard stats failed: %s", exc)
@@ -402,15 +574,41 @@ async def dashboard_action(cmd: str, request: Request):
     try:
         if cmd == "poll":
             from src.scheduler.poller import poll_once
-            count = poll_once()
+            count = await asyncio.to_thread(poll_once)
             return {"status": "ok", "processed": count}
         elif cmd == "cleanup":
-            from src.scheduler.cleanupper import run_cleanup
-            total = run_cleanup()
-            return {"status": "ok", "processed": total}
+            with _cleanup_lock:
+                if _cleanup_status["running"]:
+                    return {"status": "error", "detail": "Cleanup already in progress"}
+                _cleanup_status.update({
+                    "running": True, "batch": 0, "batch_processed": 0,
+                    "batch_total": 0, "total_processed": 0,
+                    "log_messages": ["Cleanup started — scanning for unlabeled emails..."],
+                    "finished": False, "error": None,
+                })
+
+            def _run_cleanup_bg():
+                from src.scheduler.cleanupper import run_cleanup
+                try:
+                    run_cleanup(progress_callback=_make_cleanup_callback())
+                except Exception as exc:
+                    with _cleanup_lock:
+                        _cleanup_status["running"] = False
+                        _cleanup_status["finished"] = True
+                        _cleanup_status["error"] = (
+                            f"{type(exc).__name__}: {exc}\n"
+                            f"{traceback.format_exc()}"
+                        )
+                        _cleanup_status["log_messages"].append(
+                            f"FATAL: {type(exc).__name__}: {exc}"
+                        )
+                    logger.error("Cleanup thread crashed", exc_info=True)
+
+            threading.Thread(target=_run_cleanup_bg, daemon=True).start()
+            return {"status": "started"}
         elif cmd == "spam-delete":
             from src.scheduler.spam_deleter import run_spam_delete
-            total = run_spam_delete()
+            total = await asyncio.to_thread(run_spam_delete, older_than_days=0)
             return {"status": "ok", "deleted": total}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown action: {cmd}")
@@ -418,6 +616,13 @@ async def dashboard_action(cmd: str, request: Request):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_safe_error(exc))
+
+
+@app.get("/dashboard/cleanup-status")
+async def cleanup_status():
+    """Return current cleanup progress for the dashboard activity log."""
+    with _cleanup_lock:
+        return dict(_cleanup_status)
 
 
 # ─────────────────────────────────────────────
@@ -442,7 +647,7 @@ async def api_poll(request: Request):
     _verify_secret(request)
     try:
         from src.scheduler.poller import poll_once
-        count = poll_once()
+        count = await asyncio.to_thread(poll_once)
         return {"status": "ok", "processed": count}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_safe_error(exc))
@@ -454,7 +659,7 @@ async def api_cleanup(request: Request):
     _verify_secret(request)
     try:
         from src.scheduler.cleanupper import run_cleanup
-        total = run_cleanup()
+        total = await asyncio.to_thread(run_cleanup)
         return {"status": "ok", "processed": total}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_safe_error(exc))
@@ -466,7 +671,7 @@ async def api_spam_delete(request: Request):
     _verify_secret(request)
     try:
         from src.scheduler.spam_deleter import run_spam_delete
-        total = run_spam_delete()
+        total = await asyncio.to_thread(run_spam_delete, older_than_days=0)
         return {"status": "ok", "deleted": total}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_safe_error(exc))
